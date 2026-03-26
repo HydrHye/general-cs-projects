@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fail-Safe Physics Doodle</title>
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; background-color: #fdfaf5; touch-action: none; user-select: none; }
+        canvas { display: block; }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+            font-family: sans-serif;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            border: 1px solid #ccc;
+        }
+        h1 { margin: 0 0 5px 0; font-size: 1.1rem; color: #333; }
+        p { margin: 5px 0; font-size: 0.9rem; color: #555; }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <h1>Stable Physics Doodle</h1>
+    <p><strong>Draw:</strong> Shapes will always appear.</p>
+    <p><strong>Right Click:</strong> Pin/Unpin objects.</p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/poly-decomp@0.3.0/build/decomp.min.js"></script>
+
+<script>
+    const Engine = Matter.Engine,
+          Render = Matter.Render,
+          Runner = Matter.Runner,
+          Bodies = Matter.Bodies,
+          Composite = Matter.Composite,
+          Common = Matter.Common,
+          Vertices = Matter.Vertices,
+          Bounds = Matter.Bounds,
+          Vector = Matter.Vector;
+
+    // 1. Setup Engine
+    const engine = Engine.create();
+    const world = engine.world;
+
+    engine.positionIterations = 8;
+    engine.velocityIterations = 8;
+
+    const render = Render.create({
+        element: document.body,
+        engine: engine,
+        options: {
+            width: window.innerWidth,
+            height: window.innerHeight,
+            wireframes: false, 
+            background: '#fdfaf5',
+            pixelRatio: window.devicePixelRatio
+        }
+    });
+
+    // 2. Walls
+    const walls = [
+        Bodies.rectangle(window.innerWidth/2, window.innerHeight + 60, window.innerWidth, 120, { isStatic: true }),
+        Bodies.rectangle(-60, window.innerHeight/2, 120, window.innerHeight, { isStatic: true }),
+        Bodies.rectangle(window.innerWidth + 60, window.innerHeight/2, 120, window.innerHeight, { isStatic: true })
+    ];
+    Composite.add(world, walls);
+
+    // 3. Input
+    let isDrawing = false;
+    let currentPath = [];
+    const canvas = render.canvas;
+
+    canvas.addEventListener('pointerdown', (e) => {
+        if (e.button === 0) {
+            isDrawing = true;
+            currentPath = [{ x: e.clientX, y: e.clientY }];
+        }
+    });
+
+    canvas.addEventListener('pointermove', (e) => {
+        if (isDrawing) {
+            const last = currentPath[currentPath.length - 1];
+            if (Math.hypot(e.clientX - last.x, e.clientY - last.y) > 3) {
+                currentPath.push({ x: e.clientX, y: e.clientY });
+            }
+        }
+    });
+
+    canvas.addEventListener('pointerup', (e) => {
+        if (isDrawing && e.button === 0) {
+            isDrawing = false;
+            if (currentPath.length > 5) {
+                createStableBody(currentPath);
+            }
+            currentPath = [];
+        }
+    });
+
+    // 4. Stable Body Creation (The Fix)
+    function createStableBody(path) {
+        const centre = Vertices.centre(path);
+        const start = path[0];
+        const end = path[path.length - 1];
+        const isLoop = Math.hypot(end.x - start.x, end.y - start.y) < 25;
+
+        // Visual properties
+        const color = Common.choose(['#E76F51', '#2A9D8F', '#E9C46A', '#F4A261']);
+        
+        let body;
+        const options = {
+            friction: 0.5,
+            restitution: 0.1,
+            render: { visible: false }, // Hide physics body, show art
+            plugin: {
+                // Placeholder, filled below
+                drawing: { path: null, isLoop: isLoop, color: color }
+            }
+        };
+
+        // STEP 1: Try to create a precise shape
+        try {
+            // Simplify: 1.5 is a balance between precision and stability
+            const simplified = Vertices.simplify(path, 1.5); 
+            
+            if (isLoop) {
+                body = Bodies.fromVertices(centre.x, centre.y, [simplified], options, true);
+            } else {
+                body = Bodies.fromVertices(centre.x, centre.y, [simplified], options, true);
+            }
+        } catch (e) {
+            console.warn("Complex shape failed, using fallback.");
+        }
+
+        // STEP 2: The Fail-Safe
+        // If 'fromVertices' failed (returned undefined) or created a garbage body
+        if (!body || body.parts.length === 0) {
+            const bounds = Bounds.create(path);
+            const width = bounds.max.x - bounds.min.x;
+            const height = bounds.max.y - bounds.min.y;
+            // Create a simple box physics body, but we will paint the complex drawing on top
+            body = Bodies.rectangle(centre.x, centre.y, width, height, options);
+        }
+
+        // STEP 3: Alignment
+        // Attach the drawing to the body correctly
+        if (body) {
+            const offset = {
+                x: centre.x - body.position.x,
+                y: centre.y - body.position.y
+            };
+            
+            // Map the drawing relative to the physics body
+            body.plugin.drawing.path = path.map(p => ({
+                x: p.x - centre.x + offset.x,
+                y: p.y - centre.y + offset.y
+            }));
+
+            Composite.add(world, body);
+        }
+    }
+
+    // 5. Render Loop
+    Matter.Events.on(render, 'afterRender', function() {
+        const ctx = render.context;
+        
+        // Draw active line
+        if (isDrawing && currentPath.length > 0) {
+            ctx.beginPath();
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = '#333';
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.moveTo(currentPath[0].x, currentPath[0].y);
+            for (let i = 1; i < currentPath.length; i++) {
+                ctx.lineTo(currentPath[i].x, currentPath[i].y);
+            }
+            ctx.stroke();
+        }
+
+        // Draw finished objects
+        const bodies = Composite.allBodies(world);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        bodies.forEach(body => {
+            // Check if this is one of our custom drawn objects
+            if (body.plugin && body.plugin.drawing && body.plugin.drawing.path) {
+                const data = body.plugin.drawing;
+                const path = data.path;
+
+                ctx.save();
+                ctx.translate(body.position.x, body.position.y);
+                ctx.rotate(body.angle);
+                
+                ctx.beginPath();
+                ctx.moveTo(path[0].x, path[0].y);
+                for (let i = 1; i < path.length; i++) {
+                    ctx.lineTo(path[i].x, path[i].y);
+                }
+
+                if (data.isLoop) {
+                    ctx.closePath();
+                    ctx.fillStyle = data.color;
+                    ctx.lineWidth = 2;
+                    ctx.strokeStyle = '#222';
+                    ctx.fill();
+                    ctx.stroke();
+                } else {
+                    ctx.lineWidth = 4;
+                    ctx.strokeStyle = '#222';
+                    ctx.stroke();
+                }
+
+                // Pin marker
+                if (body.isStatic) {
+                    ctx.fillStyle = '#d00';
+                    ctx.beginPath();
+                    ctx.arc(0, 0, 4, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+
+                ctx.restore();
+            }
+        });
+    });
+
+    // 6. Interactions
+    canvas.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        const found = Matter.Query.point(Composite.allBodies(world), { x: e.clientX, y: e.clientY });
+        if (found.length > 0 && !walls.includes(found[0])) {
+            Matter.Body.setStatic(found[0], !found[0].isStatic);
+        }
+    });
+
+    window.addEventListener('resize', () => {
+        render.canvas.width = window.innerWidth;
+        render.canvas.height = window.innerHeight;
+        Matter.Body.setPosition(walls[0], { x: window.innerWidth/2, y: window.innerHeight + 60 });
+        Matter.Body.setPosition(walls[2], { x: window.innerWidth + 60, y: window.innerHeight/2 });
+    });
+
+    Render.run(render);
+    Runner.run(Runner.create(), engine);
+</script>
+</body>
+</html>
