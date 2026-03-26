@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Realistic Reindeer Run</title>
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #f0f0f0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        #game-wrapper {
+            position: relative;
+            width: 100%;
+            max-width: 800px;
+        }
+
+        #game-container {
+            position: relative;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.1);
+            background: linear-gradient(to bottom, #ffffff 0%, #f0f0f0 100%);
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid #ccc;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 300px; /* Taller canvas for better scenery */
+        }
+
+        /* UI Overlays */
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            right: 30px;
+            text-align: right;
+            color: #333;
+            pointer-events: none;
+            font-weight: 300;
+        }
+
+        .score-big { font-size: 32px; font-weight: 600; letter-spacing: 2px;}
+        .score-label { font-size: 10px; text-transform: uppercase; letter-spacing: 2px; opacity: 0.6;}
+
+        #high-score-board {
+            position: absolute;
+            top: 20px;
+            left: 30px;
+            color: #333;
+            font-size: 12px;
+            pointer-events: none;
+            opacity: 0.7;
+            font-family: monospace;
+        }
+        
+        #center-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: #333;
+            background: rgba(255,255,255,0.95);
+            padding: 40px;
+            border-radius: 4px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            backdrop-filter: blur(5px);
+        }
+
+        #level-flash {
+            position: absolute;
+            top: 15%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 60px;
+            font-weight: 900;
+            color: #333;
+            display: none;
+            letter-spacing: 5px;
+            opacity: 0.2;
+        }
+
+        h1 { margin: 0 0 15px 0; font-size: 28px; letter-spacing: 1px; text-transform: uppercase;}
+        p { margin: 5px 0; font-size: 14px; color: #666;}
+        .controls { 
+            margin-top: 25px; 
+            font-size: 11px; 
+            text-transform: uppercase; 
+            letter-spacing: 1px;
+            border-top: 1px solid #ddd;
+            padding-top: 10px;
+        }
+        kbd {
+            background: #eee;
+            padding: 2px 6px;
+            border-radius: 3px;
+            border: 1px solid #ccc;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="game-wrapper">
+        <div id="game-container">
+            <canvas id="gameCanvas"></canvas>
+            
+            <div id="ui-layer">
+                <div class="score-label">Distance</div>
+                <div class="score-big"><span id="scoreSpan">00000</span></div>
+            </div>
+
+            <div id="high-score-board">
+                <b>BEST RUNS</b><br>
+                <div id="highScoreList">
+                    Loading...
+                </div>
+            </div>
+
+            <div id="level-flash">SPEED UP</div>
+
+            <div id="center-message">
+                <h1>Winter Run</h1>
+                <p>Avoid the trees and fly under Santa's sleigh.</p>
+                <br>
+                <button id="startBtn" style="padding: 10px 20px; background:#333; color:white; border:none; cursor:pointer; font-size:16px;">START GAME</button>
+                <div class="controls">
+                    <kbd>Space</kbd> Jump &nbsp;&nbsp; <kbd>↓</kbd> Crouch
+                </div>
+            </div>
+        </div>
+    </div>
+
+<script>
+    /**
+     * REALISTIC REINDEER RUN
+     * Uses Canvas API paths instead of pixel grids for high resolution.
+     * Uses procedural sine-wave animation for limbs.
+     */
+
+    // --- Config ---
+    const CONFIG = {
+        width: 800,
+        height: 300,
+        groundY: 260,
+        color: '#222', // Silhouette color
+        gravity: 0.6,
+        jumpForce: -12,
+        speedBase: 6,
+        speedMax: 16
+    };
+
+    // --- Globals ---
+    let canvas, ctx;
+    let requestID;
+    let score = 0;
+    let gameSpeed = CONFIG.speedBase;
+    let isPlaying = false;
+    let isGameOver = false;
+    let frameCount = 0;
+    let obstacles = [];
+    let particles = [];
+    let highScores = [0, 0, 0];
+    let sceneryOffset = 0;
+
+    // --- The Player (Reindeer) ---
+    const player = {
+        x: 80,
+        y: 0,
+        w: 60, // visual width approx
+        h: 60, // visual height approx
+        vy: 0,
+        isJumping: false,
+        isCrouching: false,
+        
+        // Animation State
+        legPhase: 0,
+
+        init() {
+            this.y = CONFIG.groundY;
+            this.vy = 0;
+            this.isJumping = false;
+            this.isCrouching = false;
+        },
+
+        update() {
+            // Physics
+            this.vy += CONFIG.gravity;
+            this.y += this.vy;
+
+            // Ground Collision
+            if (this.y > CONFIG.groundY) {
+                this.y = CONFIG.groundY;
+                this.vy = 0;
+                this.isJumping = false;
+                
+                // Dust particles when running
+                if (isPlaying && frameCount % 5 === 0) {
+                    createParticle(this.x + 10, this.y, 'dust');
+                }
+            }
+
+            // Animation timing
+            if (!this.isJumping) {
+                this.legPhase += (gameSpeed * 0.08); // Run speed matches game speed
+            } else {
+                this.legPhase = 0; // Static pose in air
+            }
+        },
+
+        draw() {
+            ctx.fillStyle = CONFIG.color;
+            ctx.save();
+            ctx.translate(this.x, this.y);
+
+            // CROUCH TRANSFORMATION
+            let headY = -55;
+            let bodyH = 25;
+            let bodyW = 45;
+            
+            if (this.isCrouching) {
+                headY = -30; // Head goes down
+                bodyH = 20;  // Body flattens
+                bodyW = 55;  // Body elongates
+                ctx.scale(1, 0.8); // Flatten visual
+            }
+
+            // --- DRAWING THE REALISTIC SILHOUETTE ---
+
+            // 1. Legs (Procedural Animation)
+            // Using Sin waves to calculate leg angles
+            const legL = 25;
+            
+            // Front Legs
+            let fLegAngle = Math.sin(this.legPhase) * 0.8;
+            let fLegAngle2 = Math.sin(this.legPhase + 0.5) * 0.8;
+            
+            // Back Legs (Offset phase for galloping gait)
+            let bLegAngle = Math.sin(this.legPhase + Math.PI) * 0.8;
+            let bLegAngle2 = Math.sin(this.legPhase + Math.PI + 0.5) * 0.8;
+
+            // Air Pose
+            if (this.isJumping) {
+                fLegAngle = -0.5; bLegAngle = 0.5; // Spread
+                fLegAngle2 = -0.8; bLegAngle2 = 0.8;
+            }
+
+            ctx.lineWidth = 4;
+            ctx.lineCap = 'round';
+            ctx.strokeStyle = CONFIG.color;
+
+            // Draw Legs Helper
+            const drawLeg = (ox, oy, angle) => {
+                ctx.beginPath();
+                ctx.moveTo(ox, oy);
+                // Thigh
+                let kx = ox + Math.sin(angle) * 15;
+                let ky = oy + Math.cos(angle) * 15;
+                ctx.lineTo(kx, ky);
+                // Shin (bends opposite)
+                let fx = kx + Math.sin(angle - 0.5) * 15;
+                let fy = ky + Math.cos(angle - 0.5) * 15;
+                ctx.lineTo(fx, fy);
+                ctx.stroke();
+            };
+
+            // Back Legs
+            drawLeg(-15, -15, bLegAngle);
+            drawLeg(-15, -15, bLegAngle2);
+
+            // Front Legs
+            drawLeg(20, -15, fLegAngle);
+            drawLeg(20, -15, fLegAngle2);
+
+            // 2. Body (Torso)
+            ctx.beginPath();
+            ctx.ellipse(0, -25, bodyW/2, bodyH/2, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 3. Neck & Head
+            ctx.beginPath();
+            
+            // Neck connection
+            ctx.moveTo(15, -30);
+            ctx.lineTo(25, headY + 10);
+            ctx.lineWidth = 12;
+            ctx.stroke();
+
+            // Head (Circle + Snout)
+            ctx.beginPath();
+            ctx.arc(28, headY, 9, 0, Math.PI * 2); 
+            ctx.fill();
+            
+            // Snout
+            ctx.beginPath();
+            ctx.ellipse(34, headY + 2, 6, 4, 0, 0, Math.PI*2);
+            ctx.fill();
+
+            // 4. Antlers (Branching)
+            if (!this.isCrouching) { // Hide/Lower antlers when crouching for visual clarity of hitbox
+                ctx.beginPath();
+                ctx.moveTo(25, headY - 5);
+                ctx.lineTo(20, headY - 25); // Main beam
+                ctx.lineTo(25, headY - 35);
+                
+                ctx.moveTo(20, headY - 25);
+                ctx.lineTo(15, headY - 30); // Tine 1
+                
+                ctx.moveTo(22, headY - 15);
+                ctx.lineTo(30, headY - 20); // Tine 2
+                
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+
+            // 5. Tail
+            ctx.beginPath();
+            ctx.moveTo(-20, -30);
+            ctx.lineTo(-28, -25);
+            ctx.lineTo(-20, -22);
+            ctx.fill();
+
+            ctx.restore();
+        },
+
+        jump() {
+            if (!this.isJumping) {
+                this.vy = CONFIG.jumpForce;
+                this.isJumping = true;
+                this.isCrouching = false;
+                createParticle(this.x, this.y, 'jump');
+            }
+        },
+        crouch() {
+            this.isCrouching = true;
+            if (this.isJumping) this.vy += 2; // Fast fall
+        },
+        stand() {
+            this.isCrouching = false;
+        }
+    };
+
+    // --- Obstacles ---
+    class Obstacle {
+        constructor(type) {
+            this.type = type;
+            this.x = CONFIG.width + 50;
+            this.markedForDeletion = false;
+            
+            if (type === 'santa') {
+                this.y = CONFIG.groundY - 70; // High flyer
+                this.w = 110;
+                this.h = 40;
+            } else if (type === 'tree') {
+                this.y = CONFIG.groundY;
+                this.w = 30;
+                this.h = 60 + Math.random() * 30; // Varied height
+            } else if (type === 'rock') {
+                this.y = CONFIG.groundY;
+                this.w = 40;
+                this.h = 30;
+            }
+        }
+
+        update() {
+            this.x -= gameSpeed;
+            if (this.x < -150) this.markedForDeletion = true;
+        }
+
+        draw() {
+            ctx.fillStyle = CONFIG.color;
+            
+            if (this.type === 'tree') {
+                // Realistic Pine Tree Silhouette (Triangles)
+                ctx.beginPath();
+                ctx.moveTo(this.x + this.w/2, this.y - this.h); // Top
+                ctx.lineTo(this.x + this.w, this.y - 10); // Right Base
+                ctx.lineTo(this.x + this.w/2 + 5, this.y - 10); // Trunk connection
+                ctx.lineTo(this.x + this.w/2 + 5, this.y); // Trunk R
+                ctx.lineTo(this.x + this.w/2 - 5, this.y); // Trunk L
+                ctx.lineTo(this.x + this.w/2 - 5, this.y - 10);
+                ctx.lineTo(this.x, this.y - 10); // Left Base
+                ctx.fill();
+
+                // Detailed branches
+                ctx.beginPath();
+                ctx.moveTo(this.x + 5, this.y - 30);
+                ctx.lineTo(this.x + this.w/2, this.y - this.h + 20);
+                ctx.lineTo(this.x + this.w - 5, this.y - 30);
+                ctx.fill();
+
+            } else if (this.type === 'rock') {
+                ctx.beginPath();
+                ctx.moveTo(this.x, this.y);
+                ctx.lineTo(this.x + 10, this.y - this.h);
+                ctx.lineTo(this.x + 25, this.y - this.h + 5);
+                ctx.lineTo(this.x + this.w, this.y);
+                ctx.fill();
+            } else if (this.type === 'santa') {
+                // Santa Sleigh Silhouette
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                
+                // Sleigh Body
+                ctx.beginPath();
+                ctx.moveTo(0, 0); // Back
+                ctx.bezierCurveTo(0, 20, 50, 20, 60, 0); // Bottom curve
+                ctx.lineTo(50, 0); 
+                ctx.lineTo(0, 0);
+                ctx.fill();
+
+                // Runners
+                ctx.beginPath();
+                ctx.moveTo(-5, 15);
+                ctx.lineTo(65, 10); // Blade
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // Santa Shape
+                ctx.beginPath();
+                ctx.arc(20, -5, 8, 0, Math.PI*2); // Head
+                ctx.fill();
+                ctx.fillRect(10, 0, 25, 10); // Body
+
+                // Tiny Reindeer in front
+                ctx.fillRect(80, 5, 20, 10); // Deer 1
+                ctx.fillRect(85, -5, 2, 10); // Antlers
+
+                ctx.restore();
+            }
+        }
+    }
+
+    // --- Particles (Snow/Dust) ---
+    function createParticle(x, y, type) {
+        particles.push({
+            x: x, 
+            y: y, 
+            vx: (Math.random() - 0.5) * 4, 
+            vy: (Math.random() - 1) * 4,
+            life: 1.0,
+            type: type
+        });
+    }
+
+    function updateParticles() {
+        for (let i = particles.length - 1; i >= 0; i--) {
+            let p = particles[i];
+            p.x += p.vx - (gameSpeed * 0.5); // Move with world
+            p.y += p.vy;
+            p.life -= 0.05;
+            p.vy += 0.2; // Gravity
+
+            if (p.life <= 0) particles.splice(i, 1);
+            else {
+                ctx.globalAlpha = p.life * 0.6;
+                ctx.fillStyle = '#888';
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 2, 0, Math.PI*2);
+                ctx.fill();
+                ctx.globalAlpha = 1.0;
+            }
+        }
+    }
+
+    // --- Scenery ---
+    function drawBackground() {
+        // 1. Sky
+        // 2. Moon (Static)
+        ctx.fillStyle = '#e0e0e0';
+        ctx.beginPath();
+        ctx.arc(CONFIG.width - 100, 80, 40, 0, Math.PI*2);
+        ctx.fill();
+        // Crater
+        ctx.fillStyle = '#d0d0d0';
+        ctx.beginPath();
+        ctx.arc(CONFIG.width - 80, 70, 8, 0, Math.PI*2);
+        ctx.fill();
+
+        // 3. Mountains (Parallax Slow)
+        sceneryOffset += gameSpeed * 0.1;
+        ctx.fillStyle = '#ccc';
+        ctx.beginPath();
+        ctx.moveTo(0, CONFIG.groundY);
+        for(let i=0; i <= CONFIG.width; i+= 50) {
+            // Generate deterministic noise based on x position
+            let h = Math.sin((i + sceneryOffset) * 0.01) * 50 + 50;
+            ctx.lineTo(i, CONFIG.groundY - h);
+        }
+        ctx.lineTo(CONFIG.width, CONFIG.groundY);
+        ctx.lineTo(0, CONFIG.groundY);
+        ctx.fill();
+
+        // 4. Ground Line
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, CONFIG.groundY);
+        ctx.lineTo(CONFIG.width, CONFIG.groundY);
+        ctx.stroke();
+    }
+
+    // --- Game Logic ---
+
+    function init() {
+        canvas = document.getElementById('gameCanvas');
+        ctx = canvas.getContext('2d');
+        
+        // Handle High DPI displays for crisp rendering
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = CONFIG.width * dpr;
+        canvas.height = CONFIG.height * dpr;
+        ctx.scale(dpr, dpr);
+        canvas.style.width = CONFIG.width + 'px';
+        canvas.style.height = CONFIG.height + 'px';
+
+        loadHighScores();
+        player.init();
+        
+        // Input
+        window.addEventListener('keydown', e => {
+            if (e.code === 'Space' || e.code === 'ArrowUp') handleInput('jump');
+            if (e.code === 'ArrowDown') handleInput('crouch');
+        });
+        window.addEventListener('keyup', e => {
+            if (e.code === 'ArrowDown') player.stand();
+        });
+        document.getElementById('startBtn').addEventListener('click', () => handleInput('jump'));
+
+        // Mobile touch
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            handleInput('jump');
+        }, {passive:false});
+
+        // Initial render
+        drawBackground();
+        player.draw();
+    }
+
+    function handleInput(action) {
+        if (!isPlaying && !isGameOver) {
+            startGame();
+            return;
+        }
+        if (isGameOver) {
+            if (action === 'jump') resetGame();
+            return;
+        }
+        if (action === 'jump') player.jump();
+        if (action === 'crouch') player.crouch();
+    }
+
+    function startGame() {
+        isPlaying = true;
+        document.getElementById('center-message').style.display = 'none';
+        loop();
+    }
+
+    function resetGame() {
+        isGameOver = false;
+        isPlaying = true;
+        score = 0;
+        gameSpeed = CONFIG.speedBase;
+        obstacles = [];
+        particles = [];
+        player.init();
+        document.getElementById('center-message').style.display = 'none';
+        loop();
+    }
+
+    function spawnManager() {
+        if (obstacles.length === 0) {
+            obstacles.push(new Obstacle('tree'));
+        } else {
+            const last = obstacles[obstacles.length - 1];
+            // Calc minimum gap based on speed
+            const minGap = 200 + (gameSpeed * 10) + Math.random() * 200;
+            
+            if (CONFIG.width - last.x > minGap) {
+                // Determine type based on score
+                let r = Math.random();
+                if (score > 500 && r > 0.6) {
+                    obstacles.push(new Obstacle('santa'));
+                } else if (r > 0.5) {
+                    obstacles.push(new Obstacle('tree'));
+                } else {
+                    obstacles.push(new Obstacle('rock'));
+                }
+            }
+        }
+    }
+
+    function checkCollision(p, o) {
+        // Hitbox adjustments (The visual sprite is larger than the hitbox needs to be)
+        let pH = 50; // Hitbox height
+        let pY = p.y - pH;
+        
+        if (p.isCrouching) {
+            pH = 25;
+            pY = p.y - pH;
+        }
+
+        // Simple AABB
+        // Player X is fixed at p.x to p.x + 30
+        let pRight = p.x + 30;
+        let pLeft = p.x - 10;
+
+        let oLeft = o.x;
+        let oRight = o.x + o.w;
+        let oTop = o.y - o.h;
+        let oBot = o.y;
+
+        // Visual debug for hitbox? Uncomment to see
+        // ctx.strokeStyle = 'red'; ctx.strokeRect(pLeft, pY, 40, pH);
+        // ctx.strokeRect(oLeft, oTop, o.w, o.h);
+
+        if (pRight > oLeft && pLeft < oRight && pY + pH > oTop && pY < oBot) {
+            return true;
+        }
+        return false;
+    }
+
+    function update() {
+        frameCount++;
+        ctx.clearRect(0, 0, CONFIG.width, CONFIG.height);
+        
+        drawBackground();
+
+        // Player
+        player.update();
+        player.draw();
+
+        // Obstacles
+        spawnManager();
+        obstacles.forEach(ob => {
+            ob.update();
+            ob.draw();
+            if (checkCollision(player, ob)) gameOver();
+        });
+        obstacles = obstacles.filter(o => !o.markedForDeletion);
+
+        // Particles
+        updateParticles();
+
+        // UI
+        score += gameSpeed * 0.05;
+        document.getElementById('scoreSpan').innerText = Math.floor(score).toString().padStart(5, '0');
+
+        // Difficulty scaling
+        if (gameSpeed < CONFIG.speedMax && frameCount % 600 === 0) {
+            gameSpeed += 0.5;
+            const flash = document.getElementById('level-flash');
+            flash.style.display = 'block';
+            setTimeout(()=>flash.style.display='none', 1000);
+        }
+    }
+
+    function gameOver() {
+        isGameOver = true;
+        isPlaying = false;
+        cancelAnimationFrame(requestID);
+        saveScore(score);
+        
+        const msg = document.getElementById('center-message');
+        msg.innerHTML = `<h1>CRASH!</h1>
+                         <p>Distance: ${Math.floor(score)}m</p>
+                         <button id="restartBtn" onclick="resetGame()" style="padding: 10px 20px; margin-top:10px; background:#333; color:white; border:none; cursor:pointer;">TRY AGAIN</button>`;
+        msg.style.display = 'block';
+    }
+
+    function loop() {
+        if (!isGameOver) {
+            update();
+            requestID = requestAnimationFrame(loop);
+        }
+    }
+
+    // --- High Scores ---
+    function loadHighScores() {
+        const s = localStorage.getItem('realReindeerScores');
+        if (s) highScores = JSON.parse(s);
+        updateBoard();
+    }
+    function saveScore(s) {
+        highScores.push(Math.floor(s));
+        highScores.sort((a,b)=>b-a);
+        highScores = highScores.slice(0,3);
+        localStorage.setItem('realReindeerScores', JSON.stringify(highScores));
+        updateBoard();
+    }
+    function updateBoard() {
+        document.getElementById('highScoreList').innerHTML = highScores.map((s,i)=>`<div>${i+1}. ${s}</div>`).join('');
+    }
+
+    // Go
+    window.onload = init;
+
+</script>
+</body>
+</html>
