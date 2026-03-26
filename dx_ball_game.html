@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DX Ball: Retro Web Edition</title>
+    <style>
+        body {
+            background-color: #111;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+            user-select: none;
+        }
+        canvas {
+            background: #000;
+            border: 4px solid #444;
+            box-shadow: 0 0 20px rgba(0,0,0,0.8);
+            cursor: none; /* Hide cursor for immersion */
+        }
+        #ui {
+            width: 800px;
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-size: 20px;
+            font-weight: bold;
+            text-shadow: 2px 2px #000;
+        }
+        .stat-box {
+            background: #222;
+            padding: 5px 15px;
+            border: 2px solid #555;
+        }
+        #overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            background: rgba(0, 0, 0, 0.85);
+            padding: 40px;
+            border: 2px solid #fff;
+            display: none;
+        }
+        h1 { margin-top: 0; color: #ffcc00; }
+        button {
+            background: #cc0000;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 18px;
+            cursor: pointer;
+            font-family: inherit;
+            margin-top: 20px;
+        }
+        button:hover { background: #ff0000; }
+    </style>
+</head>
+<body>
+
+    <div id="ui">
+        <div class="stat-box">SCORE: <span id="score">0</span></div>
+        <div class="stat-box">LEVEL: <span id="level">1</span></div>
+        <div class="stat-box">LIVES: <span id="lives">3</span></div>
+    </div>
+
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+
+    <div id="overlay">
+        <h1 id="msg-title">DX BALL</h1>
+        <p id="msg-text">Click to Start</p>
+        <button onclick="startGame()">PLAY</button>
+    </div>
+
+<script>
+/**
+ * DX BALL CLONE
+ * Engine: HTML5 Canvas + Vanilla JS
+ */
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const levelEl = document.getElementById('level');
+const livesEl = document.getElementById('lives');
+const overlay = document.getElementById('overlay');
+const msgTitle = document.getElementById('msg-title');
+const msgText = document.getElementById('msg-text');
+
+// --- AUDIO SYSTEM (Synthesizer) ---
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playSound(type) {
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    const now = audioCtx.currentTime;
+    
+    if (type === 'hit') {
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(150, now);
+        osc.frequency.exponentialRampToValueAtTime(40, now + 0.1);
+        gain.gain.setValueAtTime(0.1, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+        osc.start(now);
+        osc.stop(now + 0.1);
+    } else if (type === 'paddle') {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(300, now);
+        osc.frequency.linearRampToValueAtTime(500, now + 0.05);
+        gain.gain.setValueAtTime(0.2, now);
+        gain.gain.linearRampToValueAtTime(0, now + 0.1);
+        osc.start(now);
+        osc.stop(now + 0.1);
+    } else if (type === 'powerup') {
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(600, now);
+        osc.frequency.linearRampToValueAtTime(1200, now + 0.3);
+        gain.gain.setValueAtTime(0.1, now);
+        gain.gain.linearRampToValueAtTime(0, now + 0.3);
+        osc.start(now);
+        osc.stop(now + 0.3);
+    } else if (type === 'loss') {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(100, now);
+        osc.frequency.linearRampToValueAtTime(50, now + 0.5);
+        gain.gain.setValueAtTime(0.3, now);
+        gain.gain.linearRampToValueAtTime(0, now + 0.5);
+        osc.start(now);
+        osc.stop(now + 0.5);
+    }
+}
+
+// --- GAME STATE ---
+let animationId;
+let isPaused = true;
+let score = 0;
+let lives = 3;
+let currentLevel = 1;
+const MAX_LEVELS = 10;
+
+// --- ENTITIES ---
+
+// 1. PADDLE
+const paddle = {
+    x: canvas.width / 2 - 50,
+    y: canvas.height - 30,
+    width: 100,
+    height: 15,
+    color: '#00aaff',
+    speed: 8,
+    dx: 0,
+    widthOriginal: 100
+};
+
+// 2. BALL
+const ball = {
+    x: canvas.width / 2,
+    y: canvas.height - 40,
+    radius: 6,
+    speed: 5,
+    dx: 5,
+    dy: -5,
+    color: '#ffffff',
+    active: false // Stuck to paddle
+};
+
+// 3. BRICKS
+let bricks = [];
+const brickRowCount = 8;
+const brickColCount = 10;
+const brickPadding = 8;
+const brickOffsetTop = 50;
+const brickOffsetLeft = 35;
+const brickWidth = (canvas.width - (brickOffsetLeft * 2) - (brickPadding * 9)) / 10;
+const brickHeight = 20;
+
+// Colors for bricks (Classic DX Ball style)
+const brickColors = ['#ff0000', '#ff8800', '#ffff00', '#00ff00', '#00ffff', '#0088ff', '#ff00ff', '#aaaaaa'];
+
+// 4. POWERUPS
+let powerUps = [];
+const POWER_TYPES = [
+    { type: 'expand', color: '#0000ff', label: 'E', chance: 0.05 },
+    { type: 'shrink', color: '#ff0000', label: 'S', chance: 0.05 },
+    { type: 'fast',   color: '#ff8800', label: 'F', chance: 0.05 },
+    { type: 'slow',   color: '#00ff00', label: 'L', chance: 0.05 },
+    { type: 'life',   color: '#ff00ff', label: '♥', chance: 0.02 }
+];
+
+// --- INPUT HANDLING ---
+document.addEventListener("mousemove", mouseMoveHandler, false);
+document.addEventListener("click", clickHandler, false);
+
+function mouseMoveHandler(e) {
+    const relativeX = e.clientX - canvas.offsetLeft;
+    if (relativeX > 0 && relativeX < canvas.width) {
+        paddle.x = relativeX - paddle.width / 2;
+        
+        // Clamp paddle
+        if (paddle.x < 0) paddle.x = 0;
+        if (paddle.x + paddle.width > canvas.width) paddle.x = canvas.width - paddle.width;
+
+        // If ball is inactive, it sticks to paddle
+        if (!ball.active) {
+            ball.x = paddle.x + paddle.width / 2;
+        }
+    }
+}
+
+function clickHandler() {
+    if (!ball.active && !isPaused) {
+        ball.active = true;
+        // Launch ball with slight random angle
+        ball.dx = 4 * (Math.random() > 0.5 ? 1 : -1);
+        ball.dy = -ball.speed;
+    }
+}
+
+// --- LEVEL GENERATION ---
+function initLevel(level) {
+    bricks = [];
+    powerUps = [];
+    resetBall();
+    
+    // Pattern Logic based on level number
+    for (let c = 0; c < brickColCount; c++) {
+        for (let r = 0; r < brickRowCount; r++) {
+            let active = false;
+            
+            // Level 1: Simple Rows
+            if (level === 1 && r < 4) active = true;
+            
+            // Level 2: Checkerboard
+            else if (level === 2 && (c + r) % 2 === 0) active = true;
+            
+            // Level 3: Columns
+            else if (level === 3 && c % 2 !== 0 && r < 6) active = true;
+            
+            // Level 4: Pyramid-ish
+            else if (level === 4 && r >= c && r < 6) active = true;
+            
+            // Level 5: Frame
+            else if (level === 5 && (c === 0 || c === 9 || r === 0 || r === 7)) active = true;
+
+            // Level 6: Stripes
+            else if (level === 6 && r % 2 === 0) active = true;
+
+            // Level 7: Diagonal
+            else if (level === 7 && (c === r || c + r === 9)) active = true;
+            
+            // Level 8: Small Box
+            else if (level === 8 && (c > 2 && c < 7 && r > 2 && r < 6)) active = true;
+
+            // Level 9: Dense
+            else if (level === 9 && r < 7) active = true;
+
+            // Level 10: Chaos (Random)
+            else if (level === 10 && Math.random() > 0.3) active = true;
+
+            if (active) {
+                // Color mapping: Higher rows = hotter colors
+                let colorIdx = r % brickColors.length;
+                let bX = (c * (brickWidth + brickPadding)) + brickOffsetLeft;
+                let bY = (r * (brickHeight + brickPadding)) + brickOffsetTop;
+                
+                // Harder bricks on later levels
+                let status = 1; 
+                if (level > 5 && r === 0) status = 2; // Silver bricks take 2 hits
+
+                bricks.push({ 
+                    x: bX, 
+                    y: bY, 
+                    status: status, 
+                    color: brickColors[colorIdx] 
+                });
+            }
+        }
+    }
+}
+
+function resetBall() {
+    ball.active = false;
+    ball.speed = 5 + (currentLevel * 0.2); // Ball gets slightly faster each level
+    ball.x = paddle.x + paddle.width / 2;
+    ball.y = canvas.height - 40;
+    
+    // Reset paddle effects
+    paddle.width = paddle.widthOriginal;
+}
+
+// --- GAME MECHANICS ---
+
+function spawnPowerUp(x, y) {
+    const rand = Math.random();
+    let cumulative = 0;
+    
+    for (let p of POWER_TYPES) {
+        cumulative += p.chance;
+        if (rand < cumulative) {
+            powerUps.push({
+                x: x,
+                y: y,
+                type: p.type,
+                color: p.color,
+                label: p.label,
+                width: 20,
+                height: 20,
+                dy: 2
+            });
+            break;
+        }
+    }
+}
+
+function applyPowerUp(p) {
+    playSound('powerup');
+    switch (p.type) {
+        case 'expand':
+            paddle.width = Math.min(200, paddle.width + 30);
+            break;
+        case 'shrink':
+            paddle.width = Math.max(40, paddle.width - 20);
+            break;
+        case 'fast':
+            ball.speed += 2;
+            // Normalize velocity vector to new speed
+            let angleF = Math.atan2(ball.dy, ball.dx);
+            ball.dx = Math.cos(angleF) * ball.speed;
+            ball.dy = Math.sin(angleF) * ball.speed;
+            break;
+        case 'slow':
+            ball.speed = Math.max(3, ball.speed - 2);
+            let angleS = Math.atan2(ball.dy, ball.dx);
+            ball.dx = Math.cos(angleS) * ball.speed;
+            ball.dy = Math.sin(angleS) * ball.speed;
+            break;
+        case 'life':
+            lives++;
+            livesEl.innerText = lives;
+            break;
+    }
+}
+
+function collisionDetection() {
+    // Bricks
+    let activeBricks = 0;
+    
+    for (let b of bricks) {
+        if (b.status > 0) {
+            activeBricks++;
+            if (ball.x > b.x && ball.x < b.x + brickWidth && ball.y > b.y && ball.y < b.y + brickHeight) {
+                ball.dy = -ball.dy;
+                b.status--;
+                score += 10;
+                scoreEl.innerText = score;
+                playSound('hit');
+                
+                if (b.status === 0) {
+                    spawnPowerUp(b.x + brickWidth/2, b.y + brickHeight/2);
+                }
+            }
+        }
+    }
+
+    // Level Clear
+    if (activeBricks === 0) {
+        if (currentLevel < MAX_LEVELS) {
+            currentLevel++;
+            levelEl.innerText = currentLevel;
+            initLevel(currentLevel);
+        } else {
+            gameOver(true);
+        }
+    }
+}
+
+function draw() {
+    // Clear Canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw Paddle
+    ctx.beginPath();
+    let grad = ctx.createLinearGradient(paddle.x, paddle.y, paddle.x, paddle.y + paddle.height);
+    grad.addColorStop(0, '#55ddff');
+    grad.addColorStop(1, '#0055aa');
+    ctx.fillStyle = grad;
+    ctx.fillRect(paddle.x, paddle.y, paddle.width, paddle.height);
+    // Paddle highlight
+    ctx.fillStyle = "rgba(255,255,255,0.5)";
+    ctx.fillRect(paddle.x + 2, paddle.y + 2, paddle.width - 4, paddle.height/2 - 2);
+    ctx.closePath();
+
+    // Draw Bricks
+    bricks.forEach(b => {
+        if (b.status > 0) {
+            ctx.beginPath();
+            ctx.rect(b.x, b.y, brickWidth, brickHeight);
+            
+            // Visual style for harder bricks
+            if (b.status === 2) ctx.fillStyle = '#C0C0C0';
+            else ctx.fillStyle = b.color;
+            
+            ctx.fill();
+            // Bevel effect
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = "rgba(0,0,0,0.3)";
+            ctx.stroke();
+            ctx.closePath();
+        }
+    });
+
+    // Draw Powerups
+    powerUps.forEach(p => {
+        ctx.beginPath();
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x, p.y, p.width, p.height);
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 14px Arial";
+        ctx.fillText(p.label, p.x + 4, p.y + 15);
+        ctx.closePath();
+    });
+
+    // Draw Ball
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+    ctx.fillStyle = ball.color;
+    ctx.fill();
+    ctx.closePath();
+}
+
+function update() {
+    if (isPaused) return;
+
+    // Powerups Movement & Logic
+    for (let i = powerUps.length - 1; i >= 0; i--) {
+        let p = powerUps[i];
+        p.y += p.dy;
+
+        // Collision with paddle
+        if (p.y + p.height >= paddle.y && 
+            p.y <= paddle.y + paddle.height &&
+            p.x + p.width >= paddle.x && 
+            p.x <= paddle.x + paddle.width) {
+                applyPowerUp(p);
+                powerUps.splice(i, 1);
+        } 
+        // Off screen
+        else if (p.y > canvas.height) {
+            powerUps.splice(i, 1);
+        }
+    }
+
+    if (ball.active) {
+        ball.x += ball.dx;
+        ball.y += ball.dy;
+
+        // Wall collisions
+        if (ball.x + ball.radius > canvas.width || ball.x - ball.radius < 0) {
+            ball.dx = -ball.dx;
+            playSound('hit');
+        }
+        if (ball.y - ball.radius < 0) {
+            ball.dy = -ball.dy;
+            playSound('hit');
+        }
+        
+        // Paddle Collision (Advanced Physics)
+        if (ball.dy > 0 && ball.y + ball.radius >= paddle.y && 
+            ball.x >= paddle.x && ball.x <= paddle.x + paddle.width) {
+            
+            playSound('paddle');
+            
+            // Calculate hit position relative to center of paddle (-1 to 1)
+            let hitPoint = (ball.x - (paddle.x + paddle.width / 2)) / (paddle.width / 2);
+            
+            // Clamp hitpoint to prevent crazy angles
+            hitPoint = Math.max(-0.9, Math.min(0.9, hitPoint));
+
+            // Calculate new angle (Max 60 degrees)
+            let angle = hitPoint * (Math.PI / 3); 
+
+            ball.dx = ball.speed * Math.sin(angle);
+            ball.dy = -ball.speed * Math.cos(angle);
+        }
+
+        // Floor collision (Death)
+        if (ball.y + ball.radius > canvas.height) {
+            lives--;
+            livesEl.innerText = lives;
+            playSound('loss');
+            if (lives <= 0) {
+                gameOver(false);
+            } else {
+                resetBall();
+            }
+        }
+
+        collisionDetection();
+    } else {
+        // Stick ball to paddle
+        ball.x = paddle.x + paddle.width / 2;
+    }
+
+    draw();
+    animationId = requestAnimationFrame(update);
+}
+
+function startGame() {
+    overlay.style.display = 'none';
+    isPaused = false;
+    
+    if (lives <= 0 || currentLevel > MAX_LEVELS) {
+        // Full Reset
+        score = 0;
+        lives = 3;
+        currentLevel = 1;
+        scoreEl.innerText = score;
+        livesEl.innerText = lives;
+        levelEl.innerText = currentLevel;
+        initLevel(1);
+    }
+    
+    // Ensure audio context is running (browser policy)
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
+    cancelAnimationFrame(animationId);
+    update();
+}
+
+function gameOver(win) {
+    isPaused = true;
+    overlay.style.display = 'block';
+    if (win) {
+        msgTitle.innerText = "YOU WIN!";
+        msgTitle.style.color = "#00ff00";
+        msgText.innerText = "All levels cleared! Score: " + score;
+    } else {
+        msgTitle.innerText = "GAME OVER";
+        msgTitle.style.color = "#ff0000";
+        msgText.innerText = "Try again? Final Score: " + score;
+    }
+}
+
+// Initial Setup
+initLevel(1);
+overlay.style.display = 'block';
+draw(); // Draw initial state
+
+</script>
+</body>
+</html>

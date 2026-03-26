@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Toy Piano (Do-Re-Mi)</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      background: #0f172a;
+      color: white;
+    }
+
+    h1 {
+      margin-top: 20px;
+    }
+
+    .piano {
+      display: flex;
+      justify-content: center;
+      margin-top: 40px;
+    }
+
+    .key {
+      width: 60px;
+      height: 200px;
+      margin: 5px;
+      background: white;
+      color: black;
+      border-radius: 8px;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      padding-bottom: 10px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: 0.1s;
+    }
+
+    .key:active {
+      background: #60a5fa;
+      transform: scale(0.95);
+    }
+  </style>
+</head>
+<body>
+
+<h1>🎹 Toy Piano (Do-Re-Mi)</h1>
+<p>Use mouse or keys: A S D F G H J K</p>
+
+<div class="piano">
+  <div class="key" data-note="261.6">1<br>Do</div>
+  <div class="key" data-note="293.7">2<br>Re</div>
+  <div class="key" data-note="329.6">3<br>Mi</div>
+  <div class="key" data-note="349.2">4<br>Fa</div>
+  <div class="key" data-note="392.0">5<br>So</div>
+  <div class="key" data-note="440.0">6<br>La</div>
+  <div class="key" data-note="493.9">7<br>Si</div>
+  <div class="key" data-note="523.3">8<br>Do</div>
+</div>
+
+<script>
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AudioContext();
+
+  function playSound(freq) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = "sine";
+    osc.frequency.value = freq;
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.start();
+
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+
+    osc.stop(ctx.currentTime + 0.5);
+  }
+
+  // Click support
+  document.querySelectorAll(".key").forEach(key => {
+    key.addEventListener("click", () => {
+      playSound(key.dataset.note);
+    });
+  });
+
+  // Keyboard support
+  const keyMap = {
+  a: 261.6, s: 293.7, d: 329.6, f: 349.2,
+  g: 392.0, h: 440.0, j: 493.9, k: 523.3,
+
+  "1": 261.6,
+  "2": 293.7,
+  "3": 329.6,
+  "4": 349.2,
+  "5": 392.0,
+  "6": 440.0,
+  "7": 493.9,
+  "8": 523.3
+};
+
+  document.addEventListener("keydown", (e) => {
+    const freq = keyMap[e.key.toLowerCase()];
+    if (freq) playSound(freq);
+  });
+</script>
+
+</body>
+</html>
