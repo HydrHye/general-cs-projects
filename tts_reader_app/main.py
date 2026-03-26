@@ -101,6 +101,7 @@ def generate_audio(
     speed: float,
     response_format: str,
     instructions: Optional[str],
+    language: str,
 ) -> bytes:
     if not os.getenv("OPENAI_API_KEY"):
         raise HTTPException(
@@ -118,8 +119,13 @@ def generate_audio(
         "response_format": response_format,
     }
 
-    if instructions:
-        payload["instructions"] = instructions
+    language_instruction = ""
+    if language and language != "auto":
+        language_instruction = f"Speak in {language}."
+
+    combined_instructions = " ".join(part for part in [language_instruction, instructions or ""] if part).strip()
+    if combined_instructions:
+        payload["instructions"] = combined_instructions
 
     try:
         speech = client.audio.speech.create(**payload)
@@ -150,6 +156,7 @@ def read_aloud(
     speed: float = Form(default=1.0),
     response_format: str = Form(default="mp3"),
     instructions: str = Form(default=""),
+    language: str = Form(default="auto"),
 ) -> Response:
     candidate_text = text.strip()
 
@@ -178,6 +185,7 @@ def read_aloud(
         speed=speed,
         response_format=response_format,
         instructions=instructions.strip() or None,
+        language=language,
     )
 
     content_type = {

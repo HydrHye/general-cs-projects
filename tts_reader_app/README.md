@@ -10,6 +10,7 @@ A web app that converts typed text or uploaded documents (`.txt`, `.pdf`, `.doc`
   - voice type
   - speed
   - output audio format
+  - language selection (including Urdu)
   - style/nature instructions (tone, delivery, mood)
 - In-browser playback and one-click download.
 
@@ -63,7 +64,7 @@ Open: `http://127.0.0.1:8000`
 ## Quick usage flow
 
 1. Paste text or upload a file.
-2. Choose model, voice, speed, format, and style instructions.
+2. Choose model, voice, language (Urdu supported), speed, format, and style instructions.
 3. Click **Generate speech**.
 4. Play audio in-browser or download it.
 
